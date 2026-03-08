@@ -12,11 +12,10 @@ function lightcurve_simulation()
     arc_photons_t = [];
     all_escaped_times = [];
 
-    % 初始化光變曲線記錄
+    % 光變曲線記錄
     t_records = [];
     t_absorbed_records = [];
 
-    % 模擬光子
     for i = 1:params.N_photon
         photon = generate_photon(params);
         [escaped, t_arrival, escaped_pos, t_thermal_obs] = propagate_photon(photon, params);
@@ -30,23 +29,21 @@ function lightcurve_simulation()
                 arc_photons_t = [arc_photons_t; t_arrival];
             end
             
-            % 記錄光變曲線的程式碼
             t_records(end+1) = t_arrival;
 
         else % 處理被吸收的光子
             angle = atan2(photon.dir(2), photon.dir(1));
             if angle >= params.arc_angle_range(1) && angle <= params.arc_angle_range(2)
                 absorbed_pos = [absorbed_pos; escaped_pos];  % escaped_pos 於被吸收時為吸收點
-                absorbed_times = [absorbed_times; t_arrival]; % 真正被吸收的時間（可視化用）
+                absorbed_times = [absorbed_times; t_arrival];
                 absorbed_initial_positions = [absorbed_initial_positions; photon.pos];
             end
 
-            % 將「熱光子被觀測到的時間」加入熱光變曲線記錄（不是吸收瞬間）
             t_absorbed_records(end+1) = t_thermal_obs;
         end
     end
 
-    % 統計圓弧光子的 t<1 和 t≥1 數量
+    % 統計圓弧光子 t<1 和 t≥1 的數量
     if ~isempty(arc_photons_t)
         num_t_less_1 = sum(arc_photons_t < 1);
         num_t_greater_1 = sum(arc_photons_t >= 1);
@@ -59,7 +56,7 @@ function lightcurve_simulation()
         fprintf('No photons escape!\n');
     end
 
-    % 統計所有光子的 t<1 和 t≥1 數量
+    % 統計所有光子 t<1 和 t≥1 的數量
     if ~isempty(all_escaped_times)
         num_all_t_less_1 = sum(all_escaped_times < 1);
         num_all_t_greater_1 = sum(all_escaped_times >= 1);
@@ -172,7 +169,7 @@ function params = init_parameters()
     params.dt = 0.01;                   % 時間 bin 寬度
     params.T_max = 2.0;                 % 最大觀測時間
     params.injection_mode = 'point';     % 注入模式: 'point', 'sphere', 'ring'
-    params.flare_duration = 0;          % 耀班持續時間
+    params.flare_duration = 0.2;          % 耀班持續時間
     params.arc_angle_range = [-pi, pi];     % 觀察的圓弧角度範圍 -pi to pi
     params.plot_initial_positions = false;   % 是否繪製光子初始位置可視化
 
@@ -223,19 +220,16 @@ function photon = generate_photon(params)
 end
 
 function [escaped, t_arrival, escaped_pos, t_thermal_obs] = propagate_photon(photon, params)
-    % simulate photon transport; return also the time when the thermal
-    % re-emitted photon would be observed (t_thermal_obs).
+
     pos = photon.pos;
     dir = photon.dir;
 
     % 計算到內外邊界的路徑長
     [s_inner, s_outer] = compute_path_lengths(pos, dir, params);
 
-    % 預設值
     t_thermal_obs = NaN;
     escaped_pos = [NaN, NaN];
 
-    % 決定 photon 在 cocoon 中的 exit 距離 s_exit
     r = sqrt(dot(pos,pos));
     if r < params.R_inner
         if isnan(s_inner) || s_inner < 0
@@ -258,11 +252,10 @@ function [escaped, t_arrival, escaped_pos, t_thermal_obs] = propagate_photon(pho
         end
     end
 
-    % 計算光學厚度（僅在環狀介質中）
+    % 計算光學厚度
     tau = params.kappa * params.density * s_exit;
 
     if rand() < exp(-tau)
-        % photon 真正逃逸
         escaped = true;
         c = 1;
         if r < params.R_inner
@@ -272,14 +265,12 @@ function [escaped, t_arrival, escaped_pos, t_thermal_obs] = propagate_photon(pho
             t_arrival = photon.t_emit + (s_exit) / c;
             escaped_pos = photon.pos + s_exit * photon.dir;
         end
-        % 對於未被吸收的 photon，熱觀測時間同逃逸時間（若你想）
         t_thermal_obs = t_arrival;
     else
-        % photon 在介質中被吸收，選一個 s_absorb
         escaped = false;
-        s_absorb = rand() * s_exit;  % 在介質中的吸收距離
+        s_absorb = rand() * s_exit;
         if r < params.R_inner
-            s_total = s_inner + s_absorb;  % 總飛行距離到吸收點
+            s_total = s_inner + s_absorb;
             absorb_point = photon.pos + s_total * photon.dir;
         else
             s_total = s_absorb;
@@ -287,24 +278,18 @@ function [escaped, t_arrival, escaped_pos, t_thermal_obs] = propagate_photon(pho
         end
 
         c = 1;
-        t_arrival = photon.t_emit + s_total / c; % 真正被吸收的時刻（吸收瞬間）
+        t_arrival = photon.t_emit + s_total / c;
 
-        % ------ 計算熱光子被觀測到的時間 ------
+        % 計算 thermal photons 被觀測到的時間
         if ~params.thermal_isotropic
-            % 保持原方向再發射 -> 直接計算剩餘距離到外邊界
-            s_remain = s_exit - s_absorb; % remaining distance inside cocoon along the same dir
+            s_remain = s_exit - s_absorb;
             t_thermal_obs = photon.t_emit + (s_total + s_remain) / c + params.thermal_reemit_delay;
-            % 注意：代數上 (s_total + s_remain) = (s_inner + s_exit) for r<R_inner，
-            % 相當於 photon 若未被吸收本來會到達的時間（但我們把吸收時間和熱再發射間的延遲分開）
+
         else
-            % 各向同性再發射 — 在吸收點抽一個新方向，從該點算到外邊界
             new_dir_angle = rand() * 2*pi;
             new_dir = [cos(new_dir_angle), sin(new_dir_angle)];
-            % 使用 compute_path_lengths 從吸收點往 new_dir 算出到外邊界距離
             [~, s_out_new] = compute_path_lengths(absorb_point, new_dir, params);
-            % 對於吸收點位於內圈或外圈，s_out_new 應該直接是我們要的剩餘距離
             if isnan(s_out_new) || s_out_new < 0
-                % 若沒交點（理論上不該發生），退回保守估計：使用原方向的剩餘距離
                 s_remain = max(s_exit - s_absorb, 0);
             else
                 s_remain = s_out_new;
@@ -312,7 +297,7 @@ function [escaped, t_arrival, escaped_pos, t_thermal_obs] = propagate_photon(pho
             t_thermal_obs = photon.t_emit + s_total / c + s_remain / c + params.thermal_reemit_delay;
         end
 
-        % 吸收點位置（作為被吸收 visual 用）
+        % 吸收點位置
         escaped_pos = absorb_point;
     end
 end
@@ -356,8 +341,8 @@ function lightcurve = record_lightcurve(t_list, t_max, dt)
     lightcurve = histcounts(t_list, edges);
 end
 
-% function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 長條圖
-%     % 繪製光變曲線 - 單一視窗內三個子圖（歸一化長條圖）
+% function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 歸一化長條圖
+%     % 繪製光變曲線
 %     figure;
 % 
 %     % 第一個子圖: Non-thermal light curve
@@ -402,8 +387,8 @@ end
 %     end
 % end
 
-% function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 曲線圖
-%     % 繪製光變曲線 - 單一視窗內三個子圖（歸一化）
+% function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 歸一化曲線圖
+%     % 繪製光變曲線
 %     figure;
 % 
 %     % 第一個子圖: Non-thermal light curve
@@ -416,7 +401,7 @@ end
 %     end
 %     plot(0:params.dt:params.T_max-params.dt, lc_normalized, 'color', 'b', 'LineWidth', 1);
 %     title('Normalized Non-Thermal Light Curve');
-%     xlabel('Time'); ylabel('Normalized Photon Counts');
+%     xlabel('Time'); ylabel('Photon Counts');
 % 
 %     % 第二個子圖: Absorbed light curve
 %     subplot(3, 1, 2);
@@ -428,7 +413,7 @@ end
 %     end
 %     plot(0:params.dt:params.T_max-params.dt, lc_absorbed_normalized, 'color', 'k', 'LineWidth', 1);
 %     title('Normalized Absorbed Light Curve');
-%     xlabel('Time'); ylabel('Normalized Photon Counts');
+%     xlabel('Time'); ylabel('Photon Counts');
 % 
 %     % 第三個子圖: Thermal light curve
 %     if params.plot_thermal && ~isempty(N_th)
@@ -441,6 +426,6 @@ end
 %         t_axis = 0:params.dt:params.T_max-params.dt;
 %         plot(t_axis, N_th_normalized, 'color', 'r', 'LineWidth', 1);
 %         title('Normalized Thermal Light Curve');
-%         xlabel('Time'); ylabel('Normalized Photon Counts');
+%         xlabel('Time'); ylabel('Photon Counts');
 %     end
 % end
