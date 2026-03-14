@@ -22,8 +22,17 @@ function lightcurve_simulation()
         
         if escaped % 處理逃逸的光子
             all_escaped_times = [all_escaped_times; t_arrival];
-            angle = atan2(escaped_pos(2), escaped_pos(1));
-            if angle >= params.arc_angle_range(1) && angle <= params.arc_angle_range(2)
+            
+            if strcmp(params.dimension, '2D')
+                angle = atan2(escaped_pos(2), escaped_pos(1));
+                in_fov = (angle >= params.arc_angle_range(1) && angle <= params.arc_angle_range(2));
+            else
+                escaped_dir = escaped_pos / norm(escaped_pos);
+                cos_angle = dot(escaped_dir, params.view_direction);
+                in_fov = (cos_angle >= cos(params.view_cone_angle/2));
+            end
+            
+            if in_fov
                 escaped_initial_positions = [escaped_initial_positions; photon.pos];
                 escaped_times = [escaped_times; t_arrival];
                 arc_photons_t = [arc_photons_t; t_arrival];
@@ -32,13 +41,21 @@ function lightcurve_simulation()
             t_records(end+1) = t_arrival;
 
         else % 處理被吸收的光子
-            angle = atan2(photon.dir(2), photon.dir(1));
-            if angle >= params.arc_angle_range(1) && angle <= params.arc_angle_range(2)
-                absorbed_pos = [absorbed_pos; escaped_pos];  % escaped_pos 於被吸收時為吸收點
+            if strcmp(params.dimension, '2D')
+                angle = atan2(escaped_pos(2), escaped_pos(1));
+                in_fov = (angle >= params.arc_angle_range(1) && angle <= params.arc_angle_range(2));
+            else
+                absorbed_dir = escaped_pos / norm(escaped_pos);
+                cos_angle = dot(absorbed_dir, params.view_direction);
+                in_fov = (cos_angle >= cos(params.view_cone_angle/2));
+            end
+            
+            if in_fov
+                absorbed_pos = [absorbed_pos; escaped_pos];
                 absorbed_times = [absorbed_times; t_arrival];
                 absorbed_initial_positions = [absorbed_initial_positions; photon.pos];
             end
-
+        
             t_absorbed_records(end+1) = t_thermal_obs;
         end
     end
@@ -71,36 +88,32 @@ function lightcurve_simulation()
     end
 
     % 計算熱光變曲線
-    if params.plot_thermal
-        edges = 0:params.dt:params.T_max;
-        nb = numel(edges)-1;
-        N_abs = record_lightcurve(t_absorbed_records, params.T_max, params.dt);
+    edges = 0:params.dt:params.T_max;
+    nb = numel(edges)-1;
+    N_abs = record_lightcurve(t_absorbed_records, params.T_max, params.dt);
     
-        sum_N_abs = 0;
-        P = zeros(1, nb);
-        N_th = zeros(1, nb);
-        for k = 1:nb
-            sum_N_abs = sum_N_abs + N_abs(k);
-            if params.cooling_on
-                P(k) = sum_N_abs;
-                N_c = (P(k) * params.dt);
-                if N_c > 0
-                    N_th(k) = N_c;
-                end
-                sum_N_abs = sum_N_abs - N_c / params.cooling_time;
-                if sum_N_abs < 0
-                    sum_N_abs = 0;
-                end
-            else
-                P(k) = sum_N_abs;
-                N_c = (P(k) * params.dt);
-                if N_c > 0
-                    N_th(k) = N_c;
-                end
+    sum_N_abs = 0;
+    P = zeros(1, nb);
+    N_th = zeros(1, nb);
+    for k = 1:nb
+        sum_N_abs = sum_N_abs + N_abs(k);
+        if params.cooling_on
+            P(k) = sum_N_abs;
+            N_c = (P(k) * params.dt);
+            if N_c > 0
+                N_th(k) = N_c;
+            end
+            sum_N_abs = sum_N_abs - N_c / params.cooling_time;
+            if sum_N_abs < 0
+                sum_N_abs = 0;
+            end
+        else
+            P(k) = sum_N_abs;
+            N_c = (P(k) * params.dt);
+            if N_c > 0
+                N_th(k) = N_c;
             end
         end
-    else
-        N_th = [];
     end
 
     % 繪製光變曲線
@@ -165,29 +178,42 @@ function params = init_parameters()
     params.ring_outer = 0.75;           % ring的外半徑（僅在 ring 模式下使用）
     params.density = 5;                 % 環狀介質均勻密度
     params.kappa = 1;                   % 不透明度
-    params.N_photon = 50000;            % 總模擬光子數
+    params.N_photon = 100000;           % 總模擬光子數
     params.dt = 0.01;                   % 時間 bin 寬度
     params.T_max = 2.0;                 % 最大觀測時間
-    params.injection_mode = 'point';     % 注入模式: 'point', 'sphere', 'ring'
-    params.flare_duration = 0.2;          % 耀班持續時間
-    params.arc_angle_range = [-pi, pi];     % 觀察的圓弧角度範圍 -pi to pi
-    params.plot_initial_positions = false;   % 是否繪製光子初始位置可視化
+    params.injection_mode = 'point';    % 注入模式: 'point', 'sphere', 'ring'
+    params.flare_duration = 0.2;        % 耀班持續時間
 
+    params.dimension = '2D';              % 2D or 3D
+    params.arc_angle_range = [0, pi/6];   % for 2D, 想觀測的圓弧角度範圍 -pi to pi
+    params.view_direction = [0, 0, 1];    % for 3D, 想觀測方向單位向量
+    params.view_cone_angle = pi/6;        % for 3D, 想觀測圓錐角
+    params.FOV2D = pi - abs(params.arc_angle_range(2) - params.arc_angle_range(1));   % 2D的FOV
+    params.FOV3D = pi - params.view_cone_angle;                                       % 3D的FOV
+
+    % cooling
+    params.cooling_on = false;   % true有冷卻，false無冷卻
     params.cooling_time = 0.1;   % cooling time
-    params.cooling_on = false;    % true有冷卻，false無冷卻
-    params.plot_thermal = true;  % 是否畫 thermal light curves
 
-    params.thermal_reemit_delay = 0;   % 再發射的額外延遲
-    params.thermal_isotropic = false;  % true再發射方向各向同性，false保持原來方向
+    % thermal re-emit
+    params.thermal_reemit_dir = false;  % false保持原來方向，true各向同性發射
+    params.thermal_reemit_delay = 0;    % 再發射的額外延遲
+
+    % visualization
+    params.plot_initial_positions = false;   % 是否繪製光子初始位置可視化
 end
 
 function photon = generate_photon(params)
-    % 生成光子，支援不同注入區域
+
     switch params.injection_mode
         case 'point'
             r = 0; % 從中心注入
         case 'sphere'
-            r = sqrt(rand()) * params.R_inj;
+            if strcmp(params.dimension, '2D')
+                r = sqrt(rand()) * params.R_inj;
+            else
+                r = (rand())^(1/3) * params.R_inj;
+            end
             if r > params.R_inner
                 error('R_inj 必須小於等於 R_inner');
             end
@@ -205,17 +231,39 @@ function photon = generate_photon(params)
             error('未知的注入模式');
     end
     
-    theta = rand() * 2 * pi;
-    x = r * cos(theta);
-    y = r * sin(theta);
-    
-    angle = rand() * 2 * pi;
-    dx = cos(angle);
-    dy = sin(angle);
-    
-    % 所有光子頻率都設為 1
-    photon.pos = [x, y];
-    photon.dir = [dx, dy];
+    if strcmp(params.dimension, '2D')
+        theta = rand() * 2 * pi;
+        x = r * cos(theta);
+        y = r * sin(theta);
+        
+        angle = rand() * 2 * pi;
+        dx = cos(angle);
+        dy = sin(angle);
+        
+        photon.pos = [x, y];
+        photon.dir = [dx, dy];
+        
+    else
+        theta = rand() * 2 * pi;
+        cos_phi = 2 * rand() - 1;
+        phi = acos(cos_phi);
+        
+        x = r * sin(phi) * cos(theta);
+        y = r * sin(phi) * sin(theta);
+        z = r * cos(phi);
+        
+        theta_dir = rand() * 2 * pi;
+        cos_phi_dir = 2 * rand() - 1;
+        phi_dir = acos(cos_phi_dir);
+        
+        dx = sin(phi_dir) * cos(theta_dir);
+        dy = sin(phi_dir) * sin(theta_dir);
+        dz = cos(phi_dir);
+        
+        photon.pos = [x, y, z];
+        photon.dir = [dx, dy, dz];
+    end
+
     photon.t_emit = rand() * params.flare_duration;
 end
 
@@ -281,7 +329,7 @@ function [escaped, t_arrival, escaped_pos, t_thermal_obs] = propagate_photon(pho
         t_arrival = photon.t_emit + s_total / c;
 
         % 計算 thermal photons 被觀測到的時間
-        if ~params.thermal_isotropic
+        if ~params.thermal_reemit_dir
             s_remain = s_exit - s_absorb;
             t_thermal_obs = photon.t_emit + (s_total + s_remain) / c + params.thermal_reemit_delay;
 
@@ -303,34 +351,66 @@ function [escaped, t_arrival, escaped_pos, t_thermal_obs] = propagate_photon(pho
 end
 
 function [s_inner, s_outer] = compute_path_lengths(pos, dir, params)
-    % 計算光子到環狀介質內外邊界的路徑長度
-    a = dot(dir, dir);
-    b = 2 * dot(pos, dir);
-    
-    % 到內邊界的距離
-    c_inner = dot(pos, pos) - params.R_inner^2;
-    discriminant_inner = b^2 - 4*a*c_inner;
-    
-    if discriminant_inner >= 0
-        s_inner = (-b + sqrt(discriminant_inner)) / (2*a);
-        if s_inner < 0
-            s_inner = NaN; % 光子已在環狀介質內或無交點
+
+    dir = dir / norm(dir);
+    if strcmp(params.dimension, '2D')
+        a = dot(dir, dir);
+        b = 2 * dot(pos, dir);
+        
+        % 到內邊界的距離
+        c_inner = dot(pos, pos) - params.R_inner^2;
+        discriminant_inner = b^2 - 4*a*c_inner;
+        
+        if discriminant_inner >= 0
+            s_inner = (-b + sqrt(discriminant_inner)) / (2*a);
+            if s_inner < 0
+                s_inner = NaN;
+            end
+        else
+            s_inner = NaN;
         end
-    else
-        s_inner = NaN;
-    end
-    
-    % 到外邊界的距離
-    c_outer = dot(pos, pos) - params.R_outer^2;
-    discriminant_outer = b^2 - 4*a*c_outer;
-    
-    if discriminant_outer >= 0
-        s_outer = (-b + sqrt(discriminant_outer)) / (2*a);
-        if s_outer < 0
+        
+        % 到外邊界的距離
+        c_outer = dot(pos, pos) - params.R_outer^2;
+        discriminant_outer = b^2 - 4*a*c_outer;
+        
+        if discriminant_outer >= 0
+            s_outer = (-b + sqrt(discriminant_outer)) / (2*a);
+            if s_outer < 0
+                s_outer = NaN;
+            end
+        else
             s_outer = NaN;
         end
+        
     else
-        s_outer = NaN;
+        b = dot(pos, dir);
+
+        % 計算到外球面的距離
+        c_outer = dot(pos, pos) - params.R_outer^2;
+        discriminant_outer = b^2 - c_outer;
+        
+        if discriminant_outer >= 0
+            s_outer = -b + sqrt(discriminant_outer);
+            if s_outer < 0
+                s_outer = NaN;
+            end
+        else
+            s_outer = NaN;
+        end
+        
+        % 計算到內球面的距離
+        c_inner = dot(pos, pos) - params.R_inner^2;
+        discriminant_inner = b^2 - c_inner;
+        
+        if discriminant_inner >= 0
+            s_inner = -b + sqrt(discriminant_inner);
+            if s_inner < 0
+                s_inner = NaN;
+            end
+        else
+            s_inner = NaN;
+        end
     end
 end
 
@@ -373,59 +453,55 @@ end
 %     grid on; ylim([0, 1]);
 % 
 %     % 第三個子圖: Thermal light curve
-%     if params.plot_thermal && ~isempty(N_th)
-%         subplot(3, 1, 3);
-%         if max(N_th) > 0 % 避免除以零
-%             N_th_normalized = N_th / max(N_th); % 最大值歸一化
-%         else
-%             N_th_normalized = N_th; % 如果數據全為零，保持原樣
-%         end
-%         bar(t_axis, N_th_normalized, 'FaceColor', 'r', 'BarWidth', 1);
-%         title('Normalized Thermal Light Curve');
-%         xlabel('Time'); ylabel('Photon Counts');
-%         grid on; ylim([0, 1]);
+%     subplot(3, 1, 3);
+%     if max(N_th) > 0 % 避免除以零
+%         N_th_normalized = N_th / max(N_th); % 最大值歸一化
+%     else
+%         N_th_normalized = N_th; % 如果數據全為零，保持原樣
 %     end
+%     bar(t_axis, N_th_normalized, 'FaceColor', 'r', 'BarWidth', 1);
+%     title('Normalized Thermal Light Curve');
+%     xlabel('Time'); ylabel('Photon Counts');
+%     grid on; ylim([0, 1]);
 % end
 
-% function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 歸一化曲線圖
-%     % 繪製光變曲線
-%     figure;
-% 
-%     % 第一個子圖: Non-thermal light curve
-%     subplot(3, 1, 1);
-%     lc = record_lightcurve(t_records, params.T_max, params.dt);
-%     if max(lc) > 0 % 避免除以零
-%         lc_normalized = lc / max(lc); % 最大值歸一化
-%     else
-%         lc_normalized = lc; % 如果數據全為零，保持原樣
-%     end
-%     plot(0:params.dt:params.T_max-params.dt, lc_normalized, 'color', 'b', 'LineWidth', 1);
-%     title('Normalized Non-Thermal Light Curve');
-%     xlabel('Time'); ylabel('Photon Counts');
-% 
-%     % 第二個子圖: Absorbed light curve
-%     subplot(3, 1, 2);
-%     lc_absorbed = record_lightcurve(t_absorbed_records, params.T_max, params.dt);
-%     if max(lc_absorbed) > 0 % 避免除以零
-%         lc_absorbed_normalized = lc_absorbed / max(lc_absorbed); % 最大值歸一化
-%     else
-%         lc_absorbed_normalized = lc_absorbed; % 如果數據全為零，保持原樣
-%     end
-%     plot(0:params.dt:params.T_max-params.dt, lc_absorbed_normalized, 'color', 'k', 'LineWidth', 1);
-%     title('Normalized Absorbed Light Curve');
-%     xlabel('Time'); ylabel('Photon Counts');
-% 
-%     % 第三個子圖: Thermal light curve
-%     if params.plot_thermal && ~isempty(N_th)
-%         subplot(3, 1, 3);
-%         if max(N_th) > 0 % 避免除以零
-%             N_th_normalized = N_th / max(N_th); % 最大值歸一化
-%         else
-%             N_th_normalized = N_th; % 如果數據全為零，保持原樣
-%         end
-%         t_axis = 0:params.dt:params.T_max-params.dt;
-%         plot(t_axis, N_th_normalized, 'color', 'r', 'LineWidth', 1);
-%         title('Normalized Thermal Light Curve');
-%         xlabel('Time'); ylabel('Photon Counts');
-%     end
-% end
+function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 歸一化曲線圖
+    % 繪製光變曲線
+    figure;
+
+    % 第一個子圖: Non-thermal light curve
+    subplot(3, 1, 1);
+    lc = record_lightcurve(t_records, params.T_max, params.dt);
+    if max(lc) > 0 % 避免除以零
+        lc_normalized = lc / max(lc); % 最大值歸一化
+    else
+        lc_normalized = lc; % 如果數據全為零，保持原樣
+    end
+    plot(0:params.dt:params.T_max-params.dt, lc_normalized, 'color', 'b', 'LineWidth', 1);
+    title('Normalized Non-Thermal Light Curve');
+    xlabel('Time'); ylabel('Photon Counts');
+
+    % 第二個子圖: Absorbed light curve
+    subplot(3, 1, 2);
+    lc_absorbed = record_lightcurve(t_absorbed_records, params.T_max, params.dt);
+    if max(lc_absorbed) > 0 % 避免除以零
+        lc_absorbed_normalized = lc_absorbed / max(lc_absorbed); % 最大值歸一化
+    else
+        lc_absorbed_normalized = lc_absorbed; % 如果數據全為零，保持原樣
+    end
+    plot(0:params.dt:params.T_max-params.dt, lc_absorbed_normalized, 'color', 'k', 'LineWidth', 1);
+    title('Normalized Absorbed Light Curve');
+    xlabel('Time'); ylabel('Photon Counts');
+
+    % 第三個子圖: Thermal light curve
+    subplot(3, 1, 3);
+    if max(N_th) > 0 % 避免除以零
+        N_th_normalized = N_th / max(N_th); % 最大值歸一化
+    else
+        N_th_normalized = N_th; % 如果數據全為零，保持原樣
+    end
+    t_axis = 0:params.dt:params.T_max-params.dt;
+    plot(t_axis, N_th_normalized, 'color', 'r', 'LineWidth', 1);
+    title('Normalized Thermal Light Curve');
+    xlabel('Time'); ylabel('Photon Counts');
+end
