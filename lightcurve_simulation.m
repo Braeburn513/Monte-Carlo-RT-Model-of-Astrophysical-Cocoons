@@ -1,5 +1,5 @@
 function lightcurve_simulation()
-    % 種子碼
+    % seed
     rng(5132004, 'twister');
 
     % 初始化參數
@@ -171,62 +171,65 @@ end
 
 function params = init_parameters()
     % 初始化參數
-    params.R_inner = 0.8;               % cocoon內半徑
+    params.R_inner = 0.6;               % cocoon內半徑
     params.R_outer = 1;                 % cocoon外半徑
-    params.R_inj = 0.2;                 % sphere的半徑（僅在 sphere 模式下使用）
-    params.ring_inner = 0.75;           % ring的內半徑（僅在 ring 模式下使用）
-    params.ring_outer = 0.75;           % ring的外半徑（僅在 ring 模式下使用）
+    params.R_inj = 0.3;                 % sphere的半徑（僅在 sphere 模式下使用）
+    params.shell_inner = 0.3;           % shell的內半徑（僅在 shell 模式下使用）
+    params.shell_outer = 0.3;           % shell的外半徑（僅在 shell 模式下使用）
     params.density = 5;                 % 環狀介質均勻密度
     params.kappa = 1;                   % 不透明度
     params.N_photon = 100000;           % 總模擬光子數
     params.dt = 0.01;                   % 時間 bin 寬度
     params.T_max = 2.0;                 % 最大觀測時間
-    params.injection_mode = 'point';    % 注入模式: 'point', 'sphere', 'ring'
-    params.flare_duration = 0.2;        % 耀班持續時間
-
-    params.dimension = '2D';              % 2D or 3D
+    params.injection_mode = 'sphere';   % 注入模式: 'point', 'sphere', 'shell'
+    params.flare_duration = 0;          % 耀班持續時間
+    params.dimension = '3D';              % 2D or 3D
     params.arc_angle_range = [0, pi/6];   % for 2D, 想觀測的圓弧角度範圍 -pi to pi
-    params.view_direction = [0, 0, 1];    % for 3D, 想觀測方向單位向量
-    params.view_cone_angle = pi/6;        % for 3D, 想觀測圓錐角
-    params.FOV2D = pi - abs(params.arc_angle_range(2) - params.arc_angle_range(1));   % 2D的FOV
-    params.FOV3D = pi - params.view_cone_angle;                                       % 3D的FOV
+    params.view_direction = [0, 0, 1];    % for 3D, 想觀測的方向單位向量
+    params.view_cone_angle = pi/6;        % for 3D, 想觀測的圓錐角
+    % params.FOV2D = pi - abs(params.arc_angle_range(2) - params.arc_angle_range(1));   % 2D的FOV
+    % params.FOV3D = pi - params.view_cone_angle;                                       % 3D的FOV (should be considering Solid angle?)
 
     % cooling
-    params.cooling_on = false;   % true有冷卻，false無冷卻
+    params.cooling_on = true;   % true有冷卻，false無冷卻
     params.cooling_time = 0.1;   % cooling time
 
     % thermal re-emit
     params.thermal_reemit_dir = false;  % false保持原來方向，true各向同性發射
     params.thermal_reemit_delay = 0;    % 再發射的額外延遲
 
-    % visualization
-    params.plot_initial_positions = false;   % 是否繪製光子初始位置可視化
+    % visualization (3D is not available)
+    params.plot_initial_positions = false;   % 繪製光子初始位置可視化
 end
 
 function photon = generate_photon(params)
 
     switch params.injection_mode
         case 'point'
-            r = 0; % 從中心注入
+            r = 0;
         case 'sphere'
             if strcmp(params.dimension, '2D')
-                r = sqrt(rand()) * params.R_inj;
+                % uniform sphere corresponds to 1/2 power, power>>1/2 point, power<<1/2 shell
+                r = (rand())^(1/2) * params.R_inj;
             else
+                % uniform sphere corresponds to 1/3 power, power>>1/3 point, power<<1/3 shell
                 r = (rand())^(1/3) * params.R_inj;
             end
             if r > params.R_inner
                 error('R_inj 必須小於等於 R_inner');
             end
-        case 'ring'
-            % 從有厚度的圓環注入
-            if params.ring_inner > params.ring_outer
-                error('ring_inner 必須小於等於 ring_outer');
+        case 'shell'
+            if strcmp(params.dimension, '2D')
+                r = (rand() * (params.shell_outer^2 - params.shell_inner^2) + params.shell_inner^2)^(1/2);
+            else
+                r = (rand() * (params.shell_outer^3 - params.shell_inner^3) + params.shell_inner^3)^(1/3);
             end
-            if params.ring_outer > params.R_inner
-                error('ring_outer 必須小於等於 R_inner');
+            if params.shell_inner > params.shell_outer
+                error('shell_inner 必須小於等於 shell_outer');
             end
-            % 使用平方根方法確保均勻分佈在圓環內
-            r = sqrt(rand() * (params.ring_outer^2 - params.ring_inner^2) + params.ring_inner^2);
+            if params.shell_outer > params.R_inner
+                error('shell_outer 必須小於等於 R_inner');
+            end
         otherwise
             error('未知的注入模式');
     end
@@ -334,8 +337,17 @@ function [escaped, t_arrival, escaped_pos, t_thermal_obs] = propagate_photon(pho
             t_thermal_obs = photon.t_emit + (s_total + s_remain) / c + params.thermal_reemit_delay;
 
         else
-            new_dir_angle = rand() * 2*pi;
-            new_dir = [cos(new_dir_angle), sin(new_dir_angle)];
+            if strcmp(params.dimension, '2D')
+                new_dir_angle = rand() * 2*pi;
+                new_dir = [cos(new_dir_angle), sin(new_dir_angle)];
+            else
+                theta_dir = rand() * 2 * pi;
+                cos_phi_dir = 2 * rand() - 1;
+                phi_dir = acos(cos_phi_dir);
+                new_dir = [sin(phi_dir)*cos(theta_dir), ...
+                           sin(phi_dir)*sin(theta_dir), ...
+                           cos(phi_dir)];
+            end
             [~, s_out_new] = compute_path_lengths(absorb_point, new_dir, params);
             if isnan(s_out_new) || s_out_new < 0
                 s_remain = max(s_exit - s_absorb, 0);
@@ -421,56 +433,11 @@ function lightcurve = record_lightcurve(t_list, t_max, dt)
     lightcurve = histcounts(t_list, edges);
 end
 
-% function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 歸一化長條圖
-%     % 繪製光變曲線
-%     figure;
-% 
-%     % 第一個子圖: Non-thermal light curve
-%     subplot(3, 1, 1);
-%     lc = record_lightcurve(t_records, params.T_max, params.dt);
-%     if max(lc) > 0 % 避免除以零
-%         lc_normalized = lc / max(lc); % 最大值歸一化
-%     else
-%         lc_normalized = lc; % 如果數據全為零，保持原樣
-%     end
-%     t_axis = 0:params.dt:params.T_max-params.dt;
-%     bar(t_axis, lc_normalized, 'FaceColor', 'b', 'BarWidth', 1);
-%     title('Normalized Non-Thermal Light Curve');
-%     xlabel('Time'); ylabel('Photon Counts');
-%     grid on; ylim([0, 1]);
-% 
-%     % 第二個子圖: Absorbed light curve
-%     subplot(3, 1, 2);
-%     lc_absorbed = record_lightcurve(t_absorbed_records, params.T_max, params.dt);
-%     if max(lc_absorbed) > 0 % 避免除以零
-%         lc_absorbed_normalized = lc_absorbed / max(lc_absorbed); % 最大值歸一化
-%     else
-%         lc_absorbed_normalized = lc_absorbed; % 如果數據全為零，保持原樣
-%     end
-%     bar(t_axis, lc_absorbed_normalized, 'FaceColor', 'k', 'BarWidth', 1);
-%     title('Normalized Absorbed Light Curve');
-%     xlabel('Time'); ylabel('Photon Counts');
-%     grid on; ylim([0, 1]);
-% 
-%     % 第三個子圖: Thermal light curve
-%     subplot(3, 1, 3);
-%     if max(N_th) > 0 % 避免除以零
-%         N_th_normalized = N_th / max(N_th); % 最大值歸一化
-%     else
-%         N_th_normalized = N_th; % 如果數據全為零，保持原樣
-%     end
-%     bar(t_axis, N_th_normalized, 'FaceColor', 'r', 'BarWidth', 1);
-%     title('Normalized Thermal Light Curve');
-%     xlabel('Time'); ylabel('Photon Counts');
-%     grid on; ylim([0, 1]);
-% end
-
 function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 歸一化曲線圖
-    % 繪製光變曲線
-    figure;
+    figure();
 
     % 第一個子圖: Non-thermal light curve
-    subplot(3, 1, 1);
+    subplot(4, 1, 1);
     lc = record_lightcurve(t_records, params.T_max, params.dt);
     if max(lc) > 0 % 避免除以零
         lc_normalized = lc / max(lc); % 最大值歸一化
@@ -479,10 +446,11 @@ function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 歸一�
     end
     plot(0:params.dt:params.T_max-params.dt, lc_normalized, 'color', 'b', 'LineWidth', 1);
     title('Normalized Non-Thermal Light Curve');
-    xlabel('Time'); ylabel('Photon Counts');
+    xlabel('Time'); ylabel('Counts');
+    grid on;
 
     % 第二個子圖: Absorbed light curve
-    subplot(3, 1, 2);
+    subplot(4, 1, 2);
     lc_absorbed = record_lightcurve(t_absorbed_records, params.T_max, params.dt);
     if max(lc_absorbed) > 0 % 避免除以零
         lc_absorbed_normalized = lc_absorbed / max(lc_absorbed); % 最大值歸一化
@@ -491,10 +459,11 @@ function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 歸一�
     end
     plot(0:params.dt:params.T_max-params.dt, lc_absorbed_normalized, 'color', 'k', 'LineWidth', 1);
     title('Normalized Absorbed Light Curve');
-    xlabel('Time'); ylabel('Photon Counts');
+    xlabel('Time'); ylabel('Counts');
+    grid on;
 
     % 第三個子圖: Thermal light curve
-    subplot(3, 1, 3);
+    subplot(4, 1, 3);
     if max(N_th) > 0 % 避免除以零
         N_th_normalized = N_th / max(N_th); % 最大值歸一化
     else
@@ -503,5 +472,70 @@ function plot_lightcurves(t_records, t_absorbed_records, N_th, params) % 歸一�
     t_axis = 0:params.dt:params.T_max-params.dt;
     plot(t_axis, N_th_normalized, 'color', 'r', 'LineWidth', 1);
     title('Normalized Thermal Light Curve');
-    xlabel('Time'); ylabel('Photon Counts');
+    xlabel('Time'); ylabel('Counts');
+    grid on;
+
+    % 第四個子圖: Derivative Thermal Light Curve
+    % subplot(4, 1, 4);
+    % if length(N_th_normalized) > 1
+    %     dN_th = zeros(size(N_th_normalized));
+    %     dN_th(1) = (N_th_normalized(2) - N_th_normalized(1)) / params.dt;
+    %     for i = 2:length(N_th_normalized)-1
+    %         dN_th(i) = (N_th_normalized(i+1) - N_th_normalized(i-1)) / (2 * params.dt);
+    %     end
+    %     dN_th(end) = (N_th_normalized(end) - N_th_normalized(end-1)) / params.dt;
+    %     if max(abs(dN_th)) > 0
+    %         dN_th_normalized = dN_th / max(abs(dN_th));
+    %     else
+    %         dN_th_normalized = dN_th;
+    %     end
+    %     plot(t_axis, dN_th_normalized, 'color', [0.8, 0.4, 0], 'LineWidth', 1);
+    % else
+    %     plot(t_axis, zeros(size(t_axis)), 'color', [0.8, 0.4, 0], 'LineWidth', 1);
+    % end
+    % 
+    % title('Normalized Derivative Thermal Light Curve');
+    % xlabel('Time'); ylabel('Counts');
+    % grid on;
+    
+    subplot(4, 1, 4);
+    if length(N_th_normalized) > 1
+        dN_th = zeros(size(N_th_normalized));
+        dN_th(1) = 0;
+        for i = 2:length(N_th_normalized)
+            dN_th(i) = (N_th_normalized(i) - N_th_normalized(i-1)) / params.dt;
+        end
+        if max(abs(dN_th)) > 0
+            dN_th_normalized = dN_th / max(abs(dN_th));
+        else
+            dN_th_normalized = dN_th;
+        end
+        plot(t_axis, dN_th_normalized, 'color', [0.8, 0.4, 0], 'LineWidth', 1);
+    end
+    title('Normalized Derivative Thermal Light Curve');
+    xlabel('Time'); ylabel('Counts');
+    grid on;
+
+
+    % 疊圖 ==============================================================
+    figure();    
+    % Normalized non-thermal and thermal light curves
+    subplot(2, 1, 1);
+    hold on;
+    plot(t_axis, lc_normalized, 'b-', 'LineWidth', 1.5, 'DisplayName', 'Non-thermal');
+    plot(t_axis, N_th_normalized, 'r-', 'LineWidth', 1.5, 'DisplayName', 'Thermal');
+    hold off;
+    title('Normalized Non-Thermal and Thermal Light Curves');
+    xlabel('Time');
+    ylabel('Counts');
+    legend('show', 'Location', 'best');
+    grid on;
+    % Normalized derivative of thermal light curve
+    subplot(2, 1, 2);
+    plot(t_axis, dN_th_normalized, 'color', [0.8, 0.4, 0], 'LineWidth', 1.5);
+    title('Normalized Derivative of Thermal Light Curve');
+    xlabel('Time');
+    ylabel('Counts');
+    grid on;
+
 end
